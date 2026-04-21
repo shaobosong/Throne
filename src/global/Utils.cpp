@@ -171,13 +171,17 @@ QList<QString> QListInt2QListString(const QList<int> &list) {
 
 QByteArray ReadFile(const QString &path) {
     QFile file(path);
-    file.open(QFile::ReadOnly);
+    if (!file.open(QFile::ReadOnly)) {
+        return {};
+    }
     return file.readAll();
 }
 
 QString ReadFileText(const QString &path) {
     QFile file(path);
-    file.open(QFile::ReadOnly | QFile::Text);
+    if (!file.open(QFile::ReadOnly | QFile::Text)) {
+        return {};
+    }
     QTextStream stream(&file);
     return stream.readAll();
 }

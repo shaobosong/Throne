@@ -17,6 +17,8 @@
 #include "include/global/Utils.hpp"
 
 #include <QInputDialog>
+#include <QTabWidget>
+#include <QVBoxLayout>
 
 #include "include/configs/common/TLS.h"
 #include "include/configs/common/utils.h"
@@ -56,6 +58,17 @@ static void invalidateLayoutsRecursive(QWidget *w) {
     w->updateGeometry();
 }
 
+static QVBoxLayout *createTopAlignedTabPage(QTabWidget *tabs, const QString &label, int *index) {
+    auto *page = new QWidget(tabs);
+    auto *pageLayout = new QVBoxLayout(page);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
+    pageLayout->setSpacing(8);
+    pageLayout->setAlignment(Qt::AlignTop);
+
+    *index = tabs->addTab(page, label);
+    return pageLayout;
+}
+
 // Shrink/grow the dialog to fit whatever inner content the currently
 // selected proxy type needs.
 //
@@ -80,26 +93,18 @@ static void invalidateLayoutsRecursive(QWidget *w) {
     _w->resize(_w->sizeHint()); \
 } while (0)
 
-#define ADJUST_SIZE runOnThread([=,this] { \
-    if (positioned) { \
-        const QPoint _tl = pos(); \
-        FIT_TO_CONTENT(this); \
-        move(_tl); \
-    } else { \
-        FIT_TO_CONTENT(this); \
-        adjustPosition(mainwindow); \
-    } \
-}, this);
 #define LOAD_TYPE(a) ui->type->addItem(Configs::dataManager->profilesRepo->NewProfile(a)->outbound->DisplayType(), a);
 
 void DialogEditProfile::toggleSingboxWidgets(bool show) {
     ui->stream_box->setVisible(show);
     ui->right_all_w->setVisible(show);
+    syncTabVisibility();
 }
 
 void DialogEditProfile::toggleXrayWidgets(bool show) {
     ui->xray_settings_box->setVisible(show);
     ui->xray_widget->setVisible(show);
+    syncTabVisibility();
 }
 
 void DialogEditProfile::syncRightPanelVisibility() {
@@ -108,12 +113,83 @@ void DialogEditProfile::syncRightPanelVisibility() {
         !ui->network_box->isHidden() ||
         !ui->tls_camouflage_box->isHidden();
     ui->right_all_w->setVisible(anyBoxVisible);
+    syncTabVisibility();
+}
+
+void DialogEditProfile::setupSinglePanelLayout() {
+    panelTabs = new QTabWidget(this);
+    panelTabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    auto *basicLayout = createTopAlignedTabPage(panelTabs, tr("Basic"), &basicTabIndex);
+    auto *protocolLayout = createTopAlignedTabPage(panelTabs, tr("Protocol"), &protocolTabIndex);
+    auto *detailLayout = createTopAlignedTabPage(panelTabs, tr("Network / Security"), &detailTabIndex);
+
+    ui->left->insertWidget(0, panelTabs, 1);
+    ui->left_w->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    ui->right_all_w->setMinimumWidth(0);
+
+    ui->left->removeWidget(ui->groupBox);
+    basicLayout->addWidget(ui->groupBox);
+    ui->left->removeWidget(ui->bean);
+    basicLayout->addWidget(ui->bean);
+
+    ui->left->removeWidget(ui->stream_box);
+    protocolLayout->addWidget(ui->stream_box);
+    ui->left->removeWidget(ui->xray_settings_box);
+    protocolLayout->addWidget(ui->xray_settings_box);
+
+    ui->dialog_layout->removeWidget(ui->right_all_w);
+    detailLayout->addWidget(ui->right_all_w);
+    ui->dialog_layout->removeWidget(ui->xray_widget);
+    detailLayout->addWidget(ui->xray_widget);
+
+    syncTabVisibility();
+}
+
+void DialogEditProfile::syncTabVisibility() {
+    if (!panelTabs) return;
+
+    panelTabs->setTabVisible(basicTabIndex, true);
+    panelTabs->setTabVisible(protocolTabIndex, !ui->stream_box->isHidden() || !ui->xray_settings_box->isHidden());
+    panelTabs->setTabVisible(detailTabIndex, !ui->right_all_w->isHidden() || !ui->xray_widget->isHidden());
+
+    if (!panelTabs->isTabVisible(panelTabs->currentIndex())) {
+        for (int i = 0; i < panelTabs->count(); i++) {
+            if (panelTabs->isTabVisible(i)) {
+                panelTabs->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+}
+
+void DialogEditProfile::requestAdjustSize() {
+    if (suspendAdjustSize) {
+        return;
+    }
+
+    const int requestId = ++adjustSizeRequestId;
+    runOnThread([=,this] {
+        if (requestId != adjustSizeRequestId) {
+            return;
+        }
+
+        if (positioned) {
+            const QPoint topLeft = pos();
+            FIT_TO_CONTENT(this);
+            move(topLeft);
+        } else {
+            FIT_TO_CONTENT(this);
+            adjustPosition(mainwindow);
+        }
+    }, this);
 }
 
 DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId, QWidget *parent)
     : QDialog(parent), ui(new Ui::DialogEditProfile) {
     // setup UI
     ui->setupUi(this);
+    setupSinglePanelLayout();
     ui->dialog_layout->setAlignment(ui->left, Qt::AlignTop);
 
     // Xray init
@@ -190,7 +266,7 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
         }
         ui->network_box->setVisible(networkBoxVisible);
         syncRightPanelVisibility();
-        ADJUST_SIZE
+        requestAdjustSize();
     });
     ui->network->removeItem(0);
 
@@ -204,7 +280,7 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
             ui->tls_camouflage_box->setVisible(false);
         }
         syncRightPanelVisibility();
-        ADJUST_SIZE
+        requestAdjustSize();
     });
     emit ui->security->currentTextChanged(ui->security->currentText());
 
@@ -265,7 +341,8 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
             }
         }
         updateXrayCommons(txt);
-        ADJUST_SIZE
+        syncTabVisibility();
+        requestAdjustSize();
     });
 
     ui->xray_security_box->hide();
@@ -285,7 +362,8 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
             ui->xray_tls_only->setVisible(false);
             ui->xray_reality_box->setVisible(true);
         }
-        ADJUST_SIZE
+        syncTabVisibility();
+        requestAdjustSize();
     });
 
     newEnt = _type != "";
@@ -346,6 +424,9 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     // Only needed when the dialog is already visible; first show() goes
     // through the path below.
     const bool freezeRepaint = !isHidden();
+    ++adjustSizeRequestId;
+    const bool wasSuspendAdjustSize = suspendAdjustSize;
+    suspendAdjustSize = true;
     if (freezeRepaint) {
         setUpdatesEnabled(false);
     }
@@ -399,7 +480,7 @@ void DialogEditProfile::typeSelected(const QString &newType) {
         connect(_innerWidget->_protocol_version, &QComboBox::currentTextChanged, _innerWidget, [=,this](const QString &txt)
         {
             _innerWidget->editHysteriaLayout(txt);
-            ADJUST_SIZE
+            requestAdjustSize();
         });
     } else if (type == "tuic") {
         auto _innerWidget = new EditTuic(this);
@@ -454,6 +535,7 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     }
 
     if (!validType) {
+        suspendAdjustSize = wasSuspendAdjustSize;
         if (freezeRepaint) {
             setUpdatesEnabled(true);
         }
@@ -573,7 +655,7 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     innerEditor->editor_cache_updated = [=,this] { editor_cache_updated_impl(); };
     innerEditor->onStart(ent);
 
-    // 左边 common
+    // common
     ui->name->setText(ent->outbound->name);
     ui->address->setText(ent->outbound->GetAddress());
     ui->port->setText(ent->outbound->GetPort());
@@ -618,17 +700,14 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     }
     ui->stream_box->setVisible(streamBoxVisible);
 
-    // Hide the whole right panel (right_all_w) when every child box
-    // inside it is hidden — otherwise the 400px-minimum-width spacer
-    // keeps the dialog ~400px wider with nothing drawn on the right.
-    // This happens for protocols whose defaults disable TLS (e.g.
-    // HTTP with tls->enabled=false, Trojan/VMess/VLESS on first open
-    // before the user flips security to "tls"): HasTLS() may still
-    // be true for the outbound, but all three boxes — security_box,
-    // network_box, tls_camouflage_box — end up hidden.
+    // Hide the sing-box detail page when every child box inside it is
+    // hidden. This keeps the single-panel tab layout compact for
+    // protocols that do not surface extra transport/TLS fields.
     syncRightPanelVisibility();
+    syncTabVisibility();
 
     editor_cache_updated_impl();
+    suspendAdjustSize = wasSuspendAdjustSize;
 
     if (freezeRepaint) {
         // Dialog is already visible (user switched proxy type in an
@@ -638,20 +717,16 @@ void DialogEditProfile::typeSelected(const QString &newType) {
         // to EXACTLY fit the new content (shrinking as well as
         // growing — see FIT_TO_CONTENT macro above).
         //
-        // NOTE: positioned == true at this point, so the queued
-        // ADJUST_SIZE invocations triggered by nested setCurrentText()
-        // signals (security / network / xray_*) will also skip
-        // adjustPosition() and restore pos() — see the ADJUST_SIZE
-        // macro. This prevents the "jumping" when switching proxy
-        // types in sequences like socks → ssh → AnyTLS where multiple
-        // async re-layouts are queued.
+        // Nested currentTextChanged handlers also request size updates,
+        // but those requests are suppressed for the duration of a type
+        // switch so only this final resize is applied.
         const QPoint topLeft = pos();
         FIT_TO_CONTENT(this);
         move(topLeft);
         setUpdatesEnabled(true);
         update();
     } else {
-        ADJUST_SIZE
+        requestAdjustSize();
     }
 
     // First show

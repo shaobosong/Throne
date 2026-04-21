@@ -45,7 +45,23 @@ if(DEFINED ENV{WINE})
 else()
     find_program(_wine_cmd wine REQUIRED)
 endif()
-set(CMAKE_CROSSCOMPILING_EMULATOR "${_wine_cmd}" CACHE STRING "" FORCE)
+find_program(_env_cmd env REQUIRED)
+
+if(DEFINED ENV{WINEPREFIX})
+    set(_wine_prefix "$ENV{WINEPREFIX}")
+else()
+    set(_wine_prefix "/data/msvc-wine/wineprefix")
+endif()
+
+if(DEFINED ENV{WINEDEBUG})
+    set(_wine_debug "$ENV{WINEDEBUG}")
+else()
+    set(_wine_debug "-all")
+endif()
+
+set(CMAKE_CROSSCOMPILING_EMULATOR
+    "${_env_cmd};WINEPREFIX=${_wine_prefix};WINEDEBUG=${_wine_debug};${_wine_cmd}"
+    CACHE STRING "" FORCE)
 
 # Make sure find_package/find_library search the dependency trees we put on
 # CMAKE_PREFIX_PATH (Qt, OpenSSL, ...) rather than the host system.

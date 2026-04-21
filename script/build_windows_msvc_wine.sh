@@ -29,6 +29,8 @@ PROJECT_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 : "${DEPS_DIR:=$BUILD_DIR/_deps_cache}"
 : "${INPUT_VERSION:=dev}"
 : "${BUILD_TYPE:=RelWithDebInfo}"
+: "${WINEPREFIX:=/data/msvc-wine/wineprefix}"
+: "${WINEDEBUG:=-all}"
 
 log() { printf '\033[1;32m[build-windows]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[build-windows]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -114,6 +116,34 @@ EOF_SHIM
 fi
 [ -d "$QT_ROOT/Qt/lib/cmake" ] || die "Unexpected Qt layout under $QT_ROOT"
 
+QT_BIN_ROOT=$(find "$QT_ROOT" -type d -name bin -path '*/Qt/bin' | head -1)
+[ -n "$QT_BIN_ROOT" ] || die "Could not locate Qt bin directory under $QT_ROOT"
+
+qtpaths_host=""
+for candidate in \
+    "/usr/lib/qt6/bin/qtpaths6" \
+    "/usr/lib/qt6/bin/qtpaths" \
+    "$(command -v qtpaths6 2>/dev/null || true)" \
+    "$(command -v qtpaths 2>/dev/null || true)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        qtpaths_host="$candidate"
+        break
+    fi
+done
+
+if [ -n "$qtpaths_host" ]; then
+    for shim in "$QT_BIN_ROOT/qtpaths6" "$QT_BIN_ROOT/qtpaths"; do
+        log "Shimming $(basename "$shim") -> $qtpaths_host"
+        cat > "$shim" <<EOF_SHIM
+#!/usr/bin/env bash
+exec "$qtpaths_host" "\$@"
+EOF_SHIM
+        chmod +x "$shim"
+    done
+else
+    echo "Warning: could not find a host replacement for qtpaths; CMake configure may warn about missing deployment helpers." >&2
+fi
+
 # ---------------------------------------------------------------------------
 # Fetch OpenSSL (prebuilt for MSVC x64) used by Qt Network
 # ---------------------------------------------------------------------------
@@ -153,6 +183,8 @@ fi
 export CMAKE_PREFIX_PATH="$QT_ROOT/Qt/lib/cmake:${CMAKE_PREFIX_PATH:-}"
 export OPENSSL_ROOT_DIR="$OPENSSL_ROOT"
 export INPUT_VERSION="$INPUT_VERSION"
+export WINEPREFIX="$WINEPREFIX"
+export WINEDEBUG="$WINEDEBUG"
 
 log "Qt prefix:      $QT_ROOT/Qt"
 log "OpenSSL prefix: $OPENSSL_ROOT"

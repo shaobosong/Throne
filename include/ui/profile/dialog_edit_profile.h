@@ -2,6 +2,8 @@
 #include <QDialog>
 #include "profile_editor.h"
 
+class QTabWidget;
+
 #include "include/ui/utils/FloatCheckBox.h"
 #include "ui_dialog_edit_profile.h"
 #include "include/database/entities/Profile.h"
@@ -22,13 +24,14 @@ public:
 
     void toggleXrayWidgets(bool show);
 
-    // Show or hide the entire right-side panel (right_all_w) based on
+    // Show or hide the sing-box detail pane (right_all_w) based on
     // whether any of its child boxes (security_box, network_box,
-    // tls_camouflage_box) are currently visible. Without this, the
-    // panel's 400px minimumWidth leaves an empty gap on the right
-    // when all its inner boxes are hidden (e.g. HTTP/Trojan/VMess/
-    // VLESS with TLS turned off).
+    // tls_camouflage_box) are currently visible.
     void syncRightPanelVisibility();
+
+    void setupSinglePanelLayout();
+
+    void syncTabVisibility();
 
 public slots:
 
@@ -60,6 +63,11 @@ private:
 
     QString network_title_base;
 
+    QTabWidget *panelTabs{};
+    int basicTabIndex = -1;
+    int protocolTabIndex = -1;
+    int detailTabIndex = -1;
+
     struct {
         QStringList certificate;
         QString XrayDownloadSettings;
@@ -73,5 +81,10 @@ private:
 
     bool onEnd();
 
+    void requestAdjustSize();
+
     void editor_cache_updated_impl();
+
+    bool suspendAdjustSize = false;
+    int adjustSizeRequestId = 0;
 };
