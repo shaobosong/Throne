@@ -109,25 +109,43 @@ DialogBasicSettings::DialogBasicSettings(QWidget *parent)
     connect(ui->language, &QComboBox::currentIndexChanged, this, [=,this](int index) {
         CACHE.needRestart = true;
     });
+    // Font family picker: plain click-only QComboBox (was QFontComboBox, which
+    // forces an internal editable QLineEdit). Populate with installed families,
+    // select the current one, then wire up change handler (order matters: we
+    // must set the initial selection BEFORE connecting, otherwise population
+    // would fire currentTextChanged and clobber the staged value).
+    {
+        ui->font->setEditable(false);
+        ui->font->setInsertPolicy(QComboBox::NoInsert);
+        QStringList families = QFontDatabase::families();
+        families.removeDuplicates();
+        ui->font->addItems(families);
+        const QString current = Configs::dataManager->settingsRepo->font.isEmpty()
+                                    ? qApp->font().family()
+                                    : Configs::dataManager->settingsRepo->font;
+        int idx = ui->font->findText(current, Qt::MatchFixedString);
+        if (idx >= 0) ui->font->setCurrentIndex(idx);
+        CACHE.pendingFont = current;
+    }
+    // Only stage the change; actual qApp->setFont() + Save() happens in accept()
+    // so the settings dialog (and the whole app) doesn't resize mid-edit.
     connect(ui->font, &QComboBox::currentTextChanged, this, [=,this](const QString &fontName) {
-        auto font = qApp->font();
-        font.setFamily(fontName);
-        qApp->setFont(font);
-        Configs::dataManager->settingsRepo->font = fontName;
-        Configs::dataManager->settingsRepo->Save();
-        adjustSize();
+        CACHE.pendingFont = fontName;
     });
-    for (int i=7;i<=26;i++) {
+    for (int i=12;i<=24;i++) {
         ui->font_size->addItem(Int2String(i));
     }
-    ui->font_size->setCurrentText(Int2String(qApp->font().pointSize()));
+    {
+        int curPx = qApp->font().pixelSize();
+        if (curPx <= 0) curPx = qRound(qApp->font().pointSizeF() * 1.333);
+        if (curPx < 12) curPx = 14;
+        ui->font_size->setCurrentText(Int2String(curPx));
+        CACHE.pendingFontSize = curPx;
+    }
+    // Stage only; applied in accept() to avoid the settings dialog jumping
+    // around while the user is still choosing a size.
     connect(ui->font_size, &QComboBox::currentTextChanged, this, [=,this](const QString &sizeStr) {
-        auto font = qApp->font();
-        font.setPointSize(sizeStr.toInt());
-        qApp->setFont(font);
-        Configs::dataManager->settingsRepo->font_size = sizeStr.toInt();
-        Configs::dataManager->settingsRepo->Save();
-        adjustSize();
+        CACHE.pendingFontSize = sizeStr.toInt();
     });
     //
     ui->theme->addItems(QStyleFactory::keys());
@@ -311,6 +329,21 @@ void DialogBasicSettings::accept() {
 
     Configs::dataManager->settingsRepo->enable_stats = ui->connection_statistics->isChecked();
     Configs::dataManager->settingsRepo->language = ui->language->currentIndex();
+    // Commit staged font / font size only now, so nothing in the UI resized
+    // while the user was mid-edit.
+    {
+        const QString oldFont = Configs::dataManager->settingsRepo->font;
+        const int     oldSize = Configs::dataManager->settingsRepo->font_size;
+        Configs::dataManager->settingsRepo->font = CACHE.pendingFont;
+        if (CACHE.pendingFontSize > 0) {
+            Configs::dataManager->settingsRepo->font_size = CACHE.pendingFontSize;
+        }
+        if (Configs::dataManager->settingsRepo->font != oldFont
+            || Configs::dataManager->settingsRepo->font_size != oldSize) {
+            ApplyDefaultUiFont(Configs::dataManager->settingsRepo->font,
+                               Configs::dataManager->settingsRepo->font_size);
+        }
+    }
     auto oldUseCustomIcon = Configs::dataManager->settingsRepo->use_custom_icons;
     Configs::dataManager->settingsRepo->use_custom_icons = ui->enable_custom_icon->isChecked();
     if (oldUseCustomIcon != Configs::dataManager->settingsRepo->use_custom_icons) CACHE.updateTrayIcon = true;

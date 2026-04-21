@@ -13,6 +13,7 @@
 
 
 #include "include/global/Configs.hpp"
+#include "include/global/GuiUtils.hpp"
 
 #include "include/ui/mainwindow_interface.h"
 
@@ -70,7 +71,18 @@ int main(int argc, char* argv[]) {
 
     QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QApplication::setQuitOnLastWindowClosed(false);
+    // High-DPI: use PassThrough rounding so fractional scales (125%, 150%) render
+    // text at the target pixel grid instead of being bitmap-scaled (which causes
+    // Chinese/CJK text to look blurry vs. native Win32/UWP apps).
+    QApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     QApplication a(argc, argv);
+
+    // Default UI font. Qt6 on Windows defaults to "Segoe UI" which has no CJK
+    // glyphs and falls back to SimSun/PMingLiU (bitmap) -> blurry Chinese.
+    // Force a proper modern CJK-capable family, pixel sizing (avoids pt->px
+    // rounding at fractional DPI), and DirectWrite-friendly hinting.
+    ApplyDefaultUiFont();
 
 #if !defined(Q_OS_MACOS) && (QT_VERSION >= QT_VERSION_CHECK(6,9,0))
     // Load the emoji fonts

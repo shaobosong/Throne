@@ -1,5 +1,8 @@
 #pragma once
 
+#include <QApplication>
+#include <QFont>
+
 // Dialogs
 
 #define Dialog_DialogBasicSettings "DialogBasicSettings"
@@ -92,3 +95,36 @@
             checkBox->setText(text + "*");                           \
         }                                                            \
     }
+
+// Apply the project's default UI font (CJK-capable family, pixel sizing,
+// DirectWrite-friendly hinting). Called from main() and again after any
+// operation that can silently reset qApp font (e.g. QStyle / stylesheet
+// changes via ThemeManager::ApplyTheme, which otherwise causes blurry
+// Chinese text on first launch until the user toggles font settings).
+inline void ApplyDefaultUiFont(const QString &familyOverride = {},
+                               int pixelSizeOverride = 0) {
+    QFont f = qApp->font();
+    if (!familyOverride.isEmpty()) {
+        f.setFamily(familyOverride);
+    } else {
+#ifdef Q_OS_WIN
+        f.setFamilies({QStringLiteral("Microsoft YaHei UI"),
+                       QStringLiteral("Microsoft YaHei"),
+                       QStringLiteral("Segoe UI")});
+#elif defined(Q_OS_MACOS)
+        f.setFamilies({QStringLiteral("PingFang SC"),
+                       QStringLiteral("Helvetica Neue")});
+#else
+        f.setFamilies({QStringLiteral("Noto Sans CJK SC"),
+                       QStringLiteral("Source Han Sans SC"),
+                       QStringLiteral("WenQuanYi Micro Hei"),
+                       QStringLiteral("Noto Sans")});
+#endif
+    }
+    const int px = pixelSizeOverride > 0 ? pixelSizeOverride
+                                         : (f.pixelSize() > 0 ? f.pixelSize() : 14);
+    f.setPixelSize(px);
+    f.setHintingPreference(QFont::PreferNoHinting);
+    f.setStyleStrategy(QFont::PreferAntialias);
+    qApp->setFont(f);
+}

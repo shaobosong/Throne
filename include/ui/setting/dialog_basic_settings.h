@@ -28,6 +28,8 @@ private:
 
     struct {
         QString custom_inbound;
+        QString pendingFont;     // staged font family; applied only on accept()
+        int pendingFontSize = 0; // staged font pixel size; applied only on accept()
         bool needRestart = false;
         bool updateDisableTray = false;
         bool updateTrayIcon = false;

@@ -97,6 +97,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         Configs::dataManager->settingsRepo->theme = "System";
     }
     themeManager->ApplyTheme(Configs::dataManager->settingsRepo->theme);
+    // Qt styles (QStyleFactory) and stylesheets silently reset qApp->font()
+    // to the platform default (Segoe UI on Windows, which has no CJK glyphs
+    // and falls back to SimSun -> blurry Chinese). Re-apply our default UI
+    // font AFTER the theme is applied, and fold in any user overrides so the
+    // very first launch looks the same as after a settings toggle.
+    ApplyDefaultUiFont(Configs::dataManager->settingsRepo->font,
+                       Configs::dataManager->settingsRepo->font_size);
     ui->setupUi(this);
 
     // init shortcuts
@@ -126,6 +133,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     connect(qApp->styleHints(), &QStyleHints::colorSchemeChanged, this, [=,this](const Qt::ColorScheme& scheme) {
         new SyntaxHighlighter(scheme == Qt::ColorScheme::Dark, qvLogDocument);
         themeManager->ApplyTheme(Configs::dataManager->settingsRepo->theme, true);
+        ApplyDefaultUiFont(Configs::dataManager->settingsRepo->font,
+                           Configs::dataManager->settingsRepo->font_size);
     });
 #endif
     connect(themeManager, &ThemeManager::themeChanged, this, [=,this](const QString& theme){
@@ -199,17 +208,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     }
     if (!Configs::dataManager->settingsRepo->core_running) qDebug() << "[Warn] Core is taking too much time to start";
 #endif
-
-    if (!Configs::dataManager->settingsRepo->font.isEmpty()) {
-        auto font = qApp->font();
-        font.setFamily(Configs::dataManager->settingsRepo->font);
-        qApp->setFont(font);
-    }
-    if (Configs::dataManager->settingsRepo->font_size != 0) {
-        auto font = qApp->font();
-        font.setPointSize(Configs::dataManager->settingsRepo->font_size);
-        qApp->setFont(font);
-    }
 
     parallelCoreCallPool->setMaxThreadCount(10); // constant value
     //
