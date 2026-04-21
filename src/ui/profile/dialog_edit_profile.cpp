@@ -36,7 +36,60 @@
 #include "include/ui/profile/edit_shadowtls.h"
 #include "include/ui/profile/edit_xrayvless.h"
 
-#define ADJUST_SIZE runOnThread([=,this] { adjustSize(); adjustPosition(mainwindow); }, this);
+// Recursively invalidate every nested layout under `w` so cached
+// sizeHint/minimumSize values from a previously-selected proxy type
+// can't keep the dialog oversized after switching to a type that
+// needs less space.
+static void invalidateLayoutsRecursive(QWidget *w) {
+    if (!w) return;
+    if (auto *ly = w->layout()) {
+        ly->invalidate();
+    }
+    const auto children = w->findChildren<QLayout *>();
+    for (auto *ly : children) {
+        ly->invalidate();
+    }
+    const auto childWidgets = w->findChildren<QWidget *>();
+    for (auto *cw : childWidgets) {
+        cw->updateGeometry();
+    }
+    w->updateGeometry();
+}
+
+// Shrink/grow the dialog to fit whatever inner content the currently
+// selected proxy type needs.
+//
+// We don't just call adjustSize(): when a previously-shown inner
+// editor was tall/wide (e.g. "socks" variants that expose the right-
+// side transport/TLS pane or xray_widget), the dialog's top-level
+// layout and its nested QGroupBoxes keep cached minimumSize hints
+// from that larger layout. adjustSize() on a visible top-level
+// widget is conservative about shrinking below the cached layout
+// minimum, so after switching back to a smaller type (e.g. ssh,
+// AnyTLS) the window stays oversized and the content doesn't fill
+// it.
+//
+// invalidateLayoutsRecursive() forces every nested layout to re-
+// query sizeHint() based on the CURRENT visible children, and
+// resize(sizeHint()) then sets the dialog to exactly that size —
+// shrinking AND growing as needed.
+#define FIT_TO_CONTENT(widget) do { \
+    auto *_w = (widget); \
+    invalidateLayoutsRecursive(_w); \
+    if (auto *_ly = _w->layout()) _ly->activate(); \
+    _w->resize(_w->sizeHint()); \
+} while (0)
+
+#define ADJUST_SIZE runOnThread([=,this] { \
+    if (positioned) { \
+        const QPoint _tl = pos(); \
+        FIT_TO_CONTENT(this); \
+        move(_tl); \
+    } else { \
+        FIT_TO_CONTENT(this); \
+        adjustPosition(mainwindow); \
+    } \
+}, this);
 #define LOAD_TYPE(a) ui->type->addItem(Configs::dataManager->profilesRepo->NewProfile(a)->outbound->DisplayType(), a);
 
 void DialogEditProfile::toggleSingboxWidgets(bool show) {
@@ -47,6 +100,14 @@ void DialogEditProfile::toggleSingboxWidgets(bool show) {
 void DialogEditProfile::toggleXrayWidgets(bool show) {
     ui->xray_settings_box->setVisible(show);
     ui->xray_widget->setVisible(show);
+}
+
+void DialogEditProfile::syncRightPanelVisibility() {
+    const bool anyBoxVisible =
+        !ui->security_box->isHidden() ||
+        !ui->network_box->isHidden() ||
+        !ui->tls_camouflage_box->isHidden();
+    ui->right_all_w->setVisible(anyBoxVisible);
 }
 
 DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId, QWidget *parent)
@@ -128,6 +189,7 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
             if (!label->isHidden()) networkBoxVisible++;
         }
         ui->network_box->setVisible(networkBoxVisible);
+        syncRightPanelVisibility();
         ADJUST_SIZE
     });
     ui->network->removeItem(0);
@@ -141,6 +203,7 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
             ui->security_box->setVisible(false);
             ui->tls_camouflage_box->setVisible(false);
         }
+        syncRightPanelVisibility();
         ADJUST_SIZE
     });
     emit ui->security->currentTextChanged(ui->security->currentText());
@@ -555,19 +618,36 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     }
     ui->stream_box->setVisible(streamBoxVisible);
 
-    auto rightNoBox = (ui->security_box->isHidden() && ui->network_box->isHidden() && ui->tls_camouflage_box->isHidden());
-    if (rightNoBox && !ent->outbound->HasTLS() && !ent->outbound->HasTransport() && !ui->right_all_w->isHidden()) {
-        ui->right_all_w->setVisible(false);
-    }
+    // Hide the whole right panel (right_all_w) when every child box
+    // inside it is hidden — otherwise the 400px-minimum-width spacer
+    // keeps the dialog ~400px wider with nothing drawn on the right.
+    // This happens for protocols whose defaults disable TLS (e.g.
+    // HTTP with tls->enabled=false, Trojan/VMess/VLESS on first open
+    // before the user flips security to "tls"): HasTLS() may still
+    // be true for the outbound, but all three boxes — security_box,
+    // network_box, tls_camouflage_box — end up hidden.
+    syncRightPanelVisibility();
 
     editor_cache_updated_impl();
 
     if (freezeRepaint) {
-        // Resize and reposition synchronously, then re-enable painting
-        // in one shot so the user only sees a single transition from
-        // the old type to the new type with no intermediate ghost frame.
-        adjustSize();
-        adjustPosition(mainwindow);
+        // Dialog is already visible (user switched proxy type in an
+        // existing new-profile window). Keep the dialog anchored to
+        // its current top-left position so the content region stays
+        // in place while the inner editor is swapped, and resize it
+        // to EXACTLY fit the new content (shrinking as well as
+        // growing — see FIT_TO_CONTENT macro above).
+        //
+        // NOTE: positioned == true at this point, so the queued
+        // ADJUST_SIZE invocations triggered by nested setCurrentText()
+        // signals (security / network / xray_*) will also skip
+        // adjustPosition() and restore pos() — see the ADJUST_SIZE
+        // macro. This prevents the "jumping" when switching proxy
+        // types in sequences like socks → ssh → AnyTLS where multiple
+        // async re-layouts are queued.
+        const QPoint topLeft = pos();
+        FIT_TO_CONTENT(this);
+        move(topLeft);
         setUpdatesEnabled(true);
         update();
     } else {
@@ -576,7 +656,15 @@ void DialogEditProfile::typeSelected(const QString &newType) {
 
     // First show
     if (isHidden()) {
-        runOnThread([=,this] { show(); }, this);
+        runOnThread([=,this] {
+            show();
+            // Lock the position only AFTER the first show so the
+            // initial adjustPosition(mainwindow) has already run
+            // and centered the dialog over the main window.
+            positioned = true;
+        }, this);
+    } else {
+        positioned = true;
     }
 }
 

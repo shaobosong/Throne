@@ -22,6 +22,14 @@ public:
 
     void toggleXrayWidgets(bool show);
 
+    // Show or hide the entire right-side panel (right_all_w) based on
+    // whether any of its child boxes (security_box, network_box,
+    // tls_camouflage_box) are currently visible. Without this, the
+    // panel's 400px minimumWidth leaves an empty gap on the right
+    // when all its inner boxes are hidden (e.g. HTTP/Trojan/VMess/
+    // VLESS with TLS turned off).
+    void syncRightPanelVisibility();
+
 public slots:
 
     void accept() override;
@@ -40,6 +48,14 @@ private:
     QString type;
     int groupId;
     bool newEnt = false;
+    // Once the dialog has been shown once (either via the initial
+    // adjustPosition(mainwindow) centering or by any later move()),
+    // we must NOT re-center it again. Subsequent asynchronous
+    // ADJUST_SIZE invocations triggered by nested setCurrentText()
+    // signals (e.g. security/network/xray_security) would otherwise
+    // yank the window back over the mainwindow and the user would
+    // see it "jump" while switching proxy types.
+    bool positioned = false;
     std::shared_ptr<Configs::Profile> ent;
 
     QString network_title_base;
