@@ -277,6 +277,16 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     type = newType;
     bool validType = true;
 
+    // Freeze repaints while switching proxy type to avoid a "ghost" frame
+    // between the synchronous setVisible()/widget swaps and the final
+    // adjustSize() (old window size paired with the new inner layout).
+    // Only needed when the dialog is already visible; first show() goes
+    // through the path below.
+    const bool freezeRepaint = !isHidden();
+    if (freezeRepaint) {
+        setUpdatesEnabled(false);
+    }
+
     if (type == "http") {
         auto _innerWidget = new EditHttp(this);
         innerWidget = _innerWidget;
@@ -381,6 +391,9 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     }
 
     if (!validType) {
+        if (freezeRepaint) {
+            setUpdatesEnabled(true);
+        }
         MessageBoxWarning(newType, "Wrong type");
         return;
     }
@@ -548,9 +561,20 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     }
 
     editor_cache_updated_impl();
-    ADJUST_SIZE
 
-    // 第一次显示
+    if (freezeRepaint) {
+        // Resize and reposition synchronously, then re-enable painting
+        // in one shot so the user only sees a single transition from
+        // the old type to the new type with no intermediate ghost frame.
+        adjustSize();
+        adjustPosition(mainwindow);
+        setUpdatesEnabled(true);
+        update();
+    } else {
+        ADJUST_SIZE
+    }
+
+    // First show
     if (isHidden()) {
         runOnThread([=,this] { show(); }, this);
     }
